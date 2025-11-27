@@ -9,34 +9,73 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 
 from ..state import AgentState
-from ..utils import get_prompt
+from ..utils import get_prompt_data
 from ..tools.legal_tools import search_legal_code
 from ..tools.action_search_tool import create_search_tool
 
 
-def create_legal_llm(tools: List[Any]):
+# Корпоративный прокси для доступа к LLM (OpenRouter)
+DEFAULT_PROXY_URL = "http://llm-audit-proxy-ml.prod.ml.aservices.tech/v1"
+
+
+def create_legal_llm(tools: List[Any], config: Dict[str, Any] = None):
     """
     Создает LLM для Legal Expert с привязанными инструментами.
     
     Args:
         tools: Список инструментов для привязки
+        config: Конфигурация модели (из Langfuse)
         
     Returns:
         Configured LLM with bound tools
     """
-    # Выбираем LLM на основе доступных API ключей
-    if os.getenv("OPENAI_API_KEY"):
+    # Значения по умолчанию
+    model_name = "gpt-4o"
+    temperature = 0.1
+    # По умолчанию используем корпоративный прокси
+    base_url = os.getenv("LLM_BASE_URL", DEFAULT_PROXY_URL)
+    
+    # Применяем конфиг из Langfuse
+    if config:
+        model_name = config.get("model", model_name)
+        temperature = config.get("temperature", temperature)
+        # Если в Langfuse задан специфичный URL
+        config_base_url = config.get("base_url") or config.get("baseUrl") or config.get("openai_api_base")
+        if config_base_url:
+            base_url = config_base_url
+        
+        try:
+            temperature = float(temperature)
+        except (ValueError, TypeError):
+            temperature = 0.1
+
+    # Выбираем LLM
+    llm = None
+    
+    # Проверяем ключи. Для OpenRouter через прокси обычно используется API key.
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    
+    if api_key:
         llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0.1,  # Низкая температура для точности в юридических вопросах
+            model=model_name,
+            temperature=temperature,
+            base_url=base_url,
+            api_key=api_key
         )
-    elif os.getenv("ANTHROPIC_API_KEY"):
+    elif os.getenv("ANTHROPIC_API_KEY") and "claude" in model_name.lower() and base_url == DEFAULT_PROXY_URL:
+        # Fallback на прямой Anthropic, если URL не меняли на прокси
+        # (предполагаем, что прокси только для OpenAI-like, или у нас нет ключа для прокси)
         llm = ChatAnthropic(
-            model="claude-3-5-sonnet-20241022",
-            temperature=0.1,
+            model=model_name,
+            temperature=temperature
         )
-    else:
-        raise ValueError("No API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
+    
+    if llm is None:
+         llm = ChatOpenAI(
+             model="gpt-4o", 
+             temperature=temperature,
+             base_url=base_url
+         )
     
     # Привязываем инструменты к LLM
     return llm.bind_tools(tools)
@@ -53,11 +92,12 @@ async def legal_expert_node(state: AgentState) -> Dict[str, Any]:
         Обновление состояния с новыми сообщениями
     """
     try:
-        # Получаем системный промт из Langfuse
-        system_prompt = get_prompt("legal-expert-prompt")
+        # Получаем системный промт и конфиг из Langfuse
+        prompt_data = get_prompt_data("legal-expert-prompt")
+        system_prompt = prompt_data["content"]
+        model_config = prompt_data.get("config", {})
         
         # Инициализируем инструменты
-        # search_legal_code - это уже готовый инструмент (@tool)
         action_search = create_search_tool()
         
         tools = [search_legal_code, action_search]
@@ -66,8 +106,8 @@ async def legal_expert_node(state: AgentState) -> Dict[str, Any]:
             "internal_knowledge_search": action_search
         }
         
-        # Создаем LLM с инструментами
-        llm = create_legal_llm(tools)
+        # Создаем LLM с инструментами и конфигом
+        llm = create_legal_llm(tools, config=model_config)
         
         # Формируем сообщения для LLM
         messages = [

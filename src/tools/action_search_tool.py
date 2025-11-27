@@ -67,17 +67,17 @@ class KnowledgeSearchTool(BaseTool):
             # Подготовка параметров поиска
             params = SearchParams(
                 fstring=query,
-                pubAlias=pub_alias,
+                pubAlias=pub_alias or "bss", # Используем дефолт из рабочего примера
+                pubdivid=13,                 # Используем дефолт из рабочего примера
                 page=1,
                 sortby="Relevance" 
             )
 
-            # Вызов клиента (используем существующую логику пагинации, но ограничиваем 1 страницей для скорости)
-            # URL берется из переменной модуля client.py, которая инициализируется из ENV или дефолта
+            # Вызов клиента
             results: List[SearchResult] = await self._client.fetch_search_pages_and_docs(
                 search_params=params,
                 pages=1,
-                base_search_url="https://site-backend-ss.prod.ss.aservices.tech/api/v1/desktop/search" # TODO: Вынести в конфиг
+                base_search_url="https://1gl.ru/system/content/search-new/" # Обновленный URL поиска
             )
 
             if not results:
@@ -149,3 +149,38 @@ def create_search_tool() -> KnowledgeSearchTool:
     client = SearchClient()
     return KnowledgeSearchTool(client=client)
 
+
+if __name__ == "__main__":
+    import asyncio
+    from dotenv import load_dotenv
+    
+    # Настройка логирования
+    logging.basicConfig(level=logging.INFO)
+    
+    async def main():
+        # Загружаем переменные окружения
+        load_dotenv()
+        print("🔍 Запуск теста KnowledgeSearchTool...")
+        
+        try:
+            # Создаем инструмент
+            tool = create_search_tool()
+            
+            # Тестовый запрос
+            query = "налог на прибыль"
+            limit = 2
+            
+            print(f"\nЗапрос: '{query}' (limit={limit})")
+            
+            # Вызываем инструмент
+            result = await tool.ainvoke({"query": query, "limit": limit})
+            
+            print(f"\nРезультат:\n{'-'*40}\n{result}\n{'-'*40}")
+            
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Запускаем асинхронный цикл
+    asyncio.run(main())

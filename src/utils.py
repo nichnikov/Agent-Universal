@@ -3,7 +3,7 @@ Utilities for Langfuse integration and prompt management.
 """
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from langfuse import Langfuse
 
 
@@ -47,13 +47,31 @@ class LangfuseManager:
             
         Returns:
             Formatted prompt string
+        """
+        data = self.get_prompt_data(prompt_name, **kwargs)
+        return data["content"]
+
+    def get_prompt_data(self, prompt_name: str, **kwargs: Any) -> Dict[str, Any]:
+        """
+        Retrieve prompt text AND configuration from Langfuse.
+        
+        Args:
+            prompt_name: Name of the prompt in Langfuse
+            **kwargs: Variables to substitute in the prompt template
             
-        Raises:
-            ValueError: If prompt not found or Langfuse not configured
+        Returns:
+            Dict containing:
+            - content: Formatted prompt string
+            - config: Model configuration dict (or empty dict if not found)
+            - type: Prompt type (chat or text)
         """
         if self._langfuse_client is None:
             # Fallback prompts for development/testing
-            return self._get_fallback_prompt(prompt_name, **kwargs)
+            return {
+                "content": self._get_fallback_prompt(prompt_name, **kwargs),
+                "config": {},
+                "type": "text"
+            }
         
         try:
             prompt = self._langfuse_client.get_prompt(prompt_name)
@@ -61,11 +79,21 @@ class LangfuseManager:
                 raise ValueError(f"Prompt '{prompt_name}' not found in Langfuse")
             
             # Format prompt with provided variables
-            return prompt.prompt.format(**kwargs) if kwargs else prompt.prompt
+            content = prompt.compile(**kwargs) if kwargs else prompt.compile()
+            
+            return {
+                "content": content,
+                "config": prompt.config,
+                "type": getattr(prompt, "type", "text")
+            }
             
         except Exception as e:
             print(f"Error loading prompt '{prompt_name}' from Langfuse: {e}")
-            return self._get_fallback_prompt(prompt_name, **kwargs)
+            return {
+                "content": self._get_fallback_prompt(prompt_name, **kwargs),
+                "config": {},
+                "type": "text"
+            }
     
     def _get_fallback_prompt(self, prompt_name: str, **kwargs: Any) -> str:
         """
@@ -110,17 +138,13 @@ LegalExpert - специализируется на юридических во�
         return self._langfuse_client
 
 
-# Convenience function for getting prompts
+# Convenience functions
 def get_prompt(prompt_name: str, **kwargs: Any) -> str:
-    """
-    Get a prompt from Langfuse.
-    
-    Args:
-        prompt_name: Name of the prompt in Langfuse
-        **kwargs: Variables to substitute in the prompt template
-        
-    Returns:
-        Formatted prompt string
-    """
+    """Get prompt text only."""
     manager = LangfuseManager()
     return manager.get_prompt(prompt_name, **kwargs)
+
+def get_prompt_data(prompt_name: str, **kwargs: Any) -> Dict[str, Any]:
+    """Get prompt text and configuration."""
+    manager = LangfuseManager()
+    return manager.get_prompt_data(prompt_name, **kwargs)
