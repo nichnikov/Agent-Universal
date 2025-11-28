@@ -6,6 +6,7 @@ import os
 import asyncio
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langfuse.callback import CallbackHandler
 
 from src.graph import app
 from src.state import AgentState
@@ -28,9 +29,12 @@ async def test_agent(query: str) -> None:
         "next": ""
     }
     
+    # Инициализируем Langfuse callback
+    langfuse_handler = CallbackHandler()
+    
     try:
-        # Запускаем граф асинхронно
-        result = await app.ainvoke(initial_state)
+        # Запускаем граф асинхронно с трейсингом
+        result = await app.ainvoke(initial_state, config={"callbacks": [langfuse_handler]})
         
         # Выводим результаты
         print("\nХОД ВЫПОЛНЕНИЯ:")
@@ -55,9 +59,9 @@ async def main():
     load_dotenv()
     
     # Проверяем наличие API ключей
-    if not (os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")):
+    if not os.getenv("OPENAI_API_KEY"):
         print("ВНИМАНИЕ: Не найден API ключ для LLM.")
-        print("Установите OPENAI_API_KEY или ANTHROPIC_API_KEY в .env файле.")
+        print("Установите OPENAI_API_KEY в .env файле.")
         return
     
     print("🤖 Universal Autonomous Agent MVP")

@@ -3,180 +3,130 @@ Legal Expert Node - специализированный агент для юр�
 """
 
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Literal
+from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
 
 from ..state import AgentState
-from ..utils import get_prompt_data
+from ..utils import get_prompt_data, create_structured_llm
 from ..tools.legal_tools import search_legal_code
 from ..tools.action_search_tool import create_search_tool
 
 
-# Корпоративный прокси для доступа к LLM (OpenRouter)
-DEFAULT_PROXY_URL = "http://llm-audit-proxy-ml.prod.ml.aservices.tech/v1"
+# Модели данных для structured output
+class ToolRequest(BaseModel):
+    tool_name: Literal["search_legal_code", "internal_knowledge_search"]
+    tool_args: Dict[str, Any]
 
-
-def create_legal_llm(tools: List[Any], config: Dict[str, Any] = None):
-    """
-    Создает LLM для Legal Expert с привязанными инструментами.
-    
-    Args:
-        tools: Список инструментов для привязки
-        config: Конфигурация модели (из Langfuse)
-        
-    Returns:
-        Configured LLM with bound tools
-    """
-    # Значения по умолчанию
-    model_name = "gpt-4o"
-    temperature = 0.1
-    # По умолчанию используем корпоративный прокси
-    base_url = os.getenv("LLM_BASE_URL", DEFAULT_PROXY_URL)
-    
-    # Применяем конфиг из Langfuse
-    if config:
-        model_name = config.get("model", model_name)
-        temperature = config.get("temperature", temperature)
-        # Если в Langfuse задан специфичный URL
-        config_base_url = config.get("base_url") or config.get("baseUrl") or config.get("openai_api_base")
-        if config_base_url:
-            base_url = config_base_url
-        
-        try:
-            temperature = float(temperature)
-        except (ValueError, TypeError):
-            temperature = 0.1
-
-    # Выбираем LLM
-    llm = None
-    
-    # Проверяем ключи. Для OpenRouter через прокси обычно используется API key.
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-    
-    if api_key:
-        llm = ChatOpenAI(
-            model=model_name,
-            temperature=temperature,
-            base_url=base_url,
-            api_key=api_key
-        )
-    elif os.getenv("ANTHROPIC_API_KEY") and "claude" in model_name.lower() and base_url == DEFAULT_PROXY_URL:
-        # Fallback на прямой Anthropic, если URL не меняли на прокси
-        # (предполагаем, что прокси только для OpenAI-like, или у нас нет ключа для прокси)
-        llm = ChatAnthropic(
-            model=model_name,
-            temperature=temperature
-        )
-    
-    if llm is None:
-         llm = ChatOpenAI(
-             model="gpt-4o", 
-             temperature=temperature,
-             base_url=base_url
-         )
-    
-    # Привязываем инструменты к LLM
-    return llm.bind_tools(tools)
+class AgentAction(BaseModel):
+    action: Literal["call_tool", "final_answer"]
+    tool: Optional[ToolRequest] = None
+    content: Optional[str] = None
 
 
 async def legal_expert_node(state: AgentState) -> Dict[str, Any]:
     """
-    Legal Expert узел - обрабатывает юридические запросы.
-    
-    Args:
-        state: Текущее состояние агента
-        
-    Returns:
-        Обновление состояния с новыми сообщениями
+    Legal Expert узел - обрабатывает юридические запросы с использованием structured output.
     """
     try:
+        # Получаем решение от LLM
+        # Анализируем историю сообщений
+        messages = state["messages"]
+        
+        # Находим последнее сообщение пользователя для формирования контекста промта
+        last_user_message = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage) and msg.content:
+                last_user_message = msg.content
+                break
+        
         # Получаем системный промт и конфиг из Langfuse
-        prompt_data = get_prompt_data("legal-expert-prompt")
+        # Передаем контекст (историю) в промт, если это предусмотрено в Langfuse
+        prompt_context = {"last_user_message": last_user_message} if last_user_message else {}
+        prompt_data = get_prompt_data("legal-expert-prompt", **prompt_context)
         system_prompt = prompt_data["content"]
         model_config = prompt_data.get("config", {})
         
         # Инициализируем инструменты
         action_search = create_search_tool()
         
-        tools = [search_legal_code, action_search]
         tools_map = {
             "search_legal_code": search_legal_code,
             "internal_knowledge_search": action_search
         }
         
-        # Создаем LLM с инструментами и конфигом
-        llm = create_legal_llm(tools, config=model_config)
+        # Создаем LLM с structured output, используя универсальную фабрику
+        llm = create_structured_llm(AgentAction, config=model_config)
         
         # Формируем сообщения для LLM
-        messages = [
-            HumanMessage(content=system_prompt),
-            *state["messages"]
-        ]
+        # Добавляем system prompt в начало истории
+        # Примечание: В реальном диалоге мы не должны дублировать system prompt каждый раз,
+        # но для stateless графа это допустимо.
+        current_messages = [HumanMessage(content=system_prompt)] + messages
         
         # Вызываем LLM асинхронно
-        response = await llm.ainvoke(messages)
+        response = await llm.ainvoke(current_messages)
+        
+        print(f"DEBUG LegalExpert: Action={response.action}")
+        if response.action == "call_tool":
+            print(f"DEBUG LegalExpert: Tool={response.tool}")
         
         # Обрабатываем ответ
         new_messages = []
         
-        # Если LLM хочет вызвать инструмент
-        if response.tool_calls:
-            # Добавляем сообщение с вызовом инструмента
-            new_messages.append(response)
+        if response.action == "call_tool" and response.tool:
+            # Логика вызова инструмента
+            tool_name = response.tool.tool_name
+            tool_args = response.tool.tool_args
+            tool = tools_map.get(tool_name)
             
-            # Выполняем каждый вызов инструмента
-            for tool_call in response.tool_calls:
+            tool_result = f"Error: Tool '{tool_name}' not found."
+            
+            if tool:
                 try:
-                    tool_name = tool_call["name"]
-                    tool = tools_map.get(tool_name)
-                    
-                    if tool:
-                        # Разная логика вызова для sync/async инструментов
-                        if tool_name == "internal_knowledge_search":
-                            # BaseTool.ainvoke вызывает _arun
-                            tool_result = await tool.ainvoke(tool_call["args"])
-                        else:
-                            # @tool создает StructuredTool, у которого есть invoke
-                            tool_result = tool.invoke(tool_call["args"])
+                    if tool_name == "internal_knowledge_search":
+                        tool_result = await tool.ainvoke(tool_args)
                     else:
-                        tool_result = f"Error: Unknown tool '{tool_name}'"
-                    
-                    # Добавляем результат инструмента
-                    new_messages.append(
-                        ToolMessage(
-                            content=str(tool_result),
-                            tool_call_id=tool_call["id"]
-                        )
-                    )
-                    
+                        tool_result = tool.invoke(tool_args)
                 except Exception as e:
-                    # Обрабатываем ошибки инструментов
-                    error_msg = f"Error executing tool '{tool_call['name']}': {str(e)}"
-                    new_messages.append(
-                        ToolMessage(
-                            content=error_msg,
-                            tool_call_id=tool_call["id"]
-                        )
-                    )
+                    tool_result = f"Error executing tool '{tool_name}': {str(e)}"
             
-            # Получаем финальный ответ после выполнения инструментов
-            final_messages = messages + new_messages
-            # Второй вызов тоже асинхронный
-            final_response = await llm.ainvoke(final_messages)
-            new_messages.append(final_response)
+            # Добавляем результат работы инструмента в историю
+            # Важно: для модели мы должны сформулировать это как контекст
+            # Так как мы не используем нативный tool calling, мы добавляем ToolMessage или AIMessage с результатом
+            
+            # Формируем сообщение с результатом для следующего шага
+            tool_result_message = HumanMessage(
+                content=f"Результат выполнения инструмента {tool_name}:\n{str(tool_result)}\n\nТеперь дай финальный ответ на основе этой информации."
+            )
+            
+            # Рекурсивный вызов LLM с результатом (или добавление в историю и ожидание следующего шага)
+            # В данном дизайне мы делаем один шаг "думать -> действовать -> отвечать"
+            
+            # Формируем новый контекст: история + результат инструмента
+            next_step_messages = current_messages + [tool_result_message]
+            
+            # Второй вызов для получения финального ответа
+            final_response = await llm.ainvoke(next_step_messages)
+            
+            # Возвращаем финальный ответ пользователю
+            if final_response.content:
+                new_messages.append(AIMessage(content=final_response.content))
+            else:
+                 new_messages.append(AIMessage(content="Извините, не удалось сформировать ответ после поиска."))
+                 
+        elif response.action == "final_answer" and response.content:
+            new_messages.append(AIMessage(content=response.content))
             
         else:
-            # Если инструменты не нужны, просто добавляем ответ
-            new_messages.append(response)
+            # Fallback если модель вернула что-то странное
+            new_messages.append(AIMessage(content="Извините, я не смог определить дальнейшие действия."))
         
         return {
             "messages": new_messages
         }
         
     except Exception as e:
-        # Обработка критических ошибок
         import traceback
         traceback.print_exc()
         error_response = AIMessage(

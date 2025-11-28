@@ -32,9 +32,8 @@ cp env.example .env
 
 ### API Ключи
 
-Необходим хотя бы один из следующих ключей:
+Необходим ключ:
 - `OPENAI_API_KEY` - для использования GPT-4o
-- `ANTHROPIC_API_KEY` - для использования Claude-3.5-Sonnet
 
 ### Langfuse (опционально)
 
