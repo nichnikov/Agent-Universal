@@ -7,6 +7,7 @@ Supervisor Node - управляющий узел для маршрутизац�
 
 import os
 from typing import Dict, Any, Literal
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage
 # from langchain_openai import ChatOpenAI # Удаляем неиспользуемый импорт
@@ -28,12 +29,13 @@ class RouteResponse(BaseModel):
 
 
 
-async def supervisor_node(state: AgentState) -> Dict[str, Any]:
+async def supervisor_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """
     Supervisor узел - принимает решения о маршрутизации.
     
     Args:
         state: Текущее состояние агента
+        config: Конфигурация запуска (включая callbacks)
         
     Returns:
         Обновление состояния с указанием следующего шага
@@ -91,7 +93,8 @@ async def supervisor_node(state: AgentState) -> Dict[str, Any]:
         llm = create_structured_llm(RouteResponse, llm_factory_config)
         
         # Получаем решение от LLM
-        response = await llm.ainvoke([HumanMessage(content=analysis_prompt)])
+        # Передаем config, чтобы работали callbacks (в т.ч. Langfuse)
+        response = await llm.ainvoke([HumanMessage(content=analysis_prompt)], config=config)
         
         print(f"DEBUG Supervisor: Decision={response.next}")
         
