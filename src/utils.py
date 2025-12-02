@@ -8,6 +8,8 @@ from langfuse import Langfuse
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
+from .prompts import get_fallback_prompt
+
 T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_PROXY_URL = "http://llm-audit-proxy-ml.prod.ml.aservices.tech/v1"
@@ -110,12 +112,13 @@ class LangfuseManager:
         data = self.get_prompt_data(prompt_name, **kwargs)
         return data["content"]
 
-    def get_prompt_data(self, prompt_name: str, **kwargs: Any) -> Dict[str, Any]:
+    def get_prompt_data(self, prompt_name: str, force_fallback: bool = False, **kwargs: Any) -> Dict[str, Any]:
         """
         Retrieve prompt text AND configuration from Langfuse.
         
         Args:
             prompt_name: Name of the prompt in Langfuse
+            force_fallback: If True, forces the use of fallback prompts from prompts.py
             **kwargs: Variables to substitute in the prompt template
             
         Returns:
@@ -124,10 +127,10 @@ class LangfuseManager:
             - config: Model configuration dict (or empty dict if not found)
             - type: Prompt type (chat or text)
         """
-        if self._langfuse_client is None:
-            # Fallback prompts for development/testing
+        if self._langfuse_client is None or force_fallback:
+            # Fallback prompts for development/testing (from prompts.py)
             return {
-                "content": self._get_fallback_prompt(prompt_name, **kwargs),
+                "content": get_fallback_prompt(prompt_name, **kwargs),
                 "config": {},
                 "type": "text"
             }
@@ -148,99 +151,12 @@ class LangfuseManager:
             
         except Exception as e:
             print(f"Error loading prompt '{prompt_name}' from Langfuse: {e}")
+            # Fallback to local prompts on error
             return {
-                "content": self._get_fallback_prompt(prompt_name, **kwargs),
+                "content": get_fallback_prompt(prompt_name, **kwargs),
                 "config": {},
                 "type": "text"
             }
-    
-    def _get_fallback_prompt(self, prompt_name: str, **kwargs: Any) -> str:
-        """
-        Fallback prompts for development when Langfuse is not available.
-        """
-        fallback_prompts = {
-            "supervisor-system-prompt": """Ты — супервизор мультиагентной системы. Твоя задача — классифицировать входящие сообщения и направлять их нужному специалисту или завершать диалог.
-
-У тебя в подчинении есть агент:
-**LegalExpert** — эксперт по российскому праву (ГК РФ, УК РФ, КоАП, налоги, договоры).
-
----
-АНАЛИЗ ЗАПРОСА
-
-Пользователь прислал следующее сообщение:
-"{last_user_message}"
-
----
-ИНСТРУКЦИЯ ПО МАРШРУТИЗАЦИИ
-
-Проанализируй сообщение выше и выбери следующий шаг (next) на основе строгих критериев:
-
-ВЫБИРАЙ "LegalExpert", ЕСЛИ:
-1. Вопрос содержит упоминание законов, кодексов (ГК, УК, НК РФ) или статей.
-2. Требуется юридическая консультация или правовой анализ ситуации.
-3. Вопрос касается налогообложения, бухгалтерского учета (в правовом аспекте) или финансовых рисков.
-4. Пользователь спрашивает о составлении, проверке или расторжении договоров и сделок.
-5. Вопрос касается судебных процедур, штрафов или взаимодействия с госорганами.
-
-ВЫБИРАЙ "FINISH", ЕСЛИ:
-1. Это простое приветствие ("Привет", "Здравствуй") или вопрос "Кто ты?".
-2. Это выражение благодарности или подтверждение завершения ("Спасибо", "Понятно", "Больше нет вопросов").
-3. Вопрос явно не относится к теме права (погода, программирование, рецепты).
-4. Пользователь не задает вопроса, а просто комментирует предыдущий ответ без запроса новой информации.
-
-Твоя задача — вернуть только структурированное решение о выборе маршрута в формате JSON с полем "next".
-""",
-
-            "legal-expert-prompt": """Ты — опытный юрист Российской Федерации.
-
-Твоя задача — отвечать на вопросы, используя ТОЛЬКО доступные инструменты.
-
-ВАЖНОЕ ПРАВИЛО: Ты НЕ обладаешь знаниями о внутренних документах компании или специфических налогах, пока не найдешь их через инструменты.
-Если вопрос касается "внутренней базы знаний" или конкретных законов — ТЫ ОБЯЗАН СНАЧАЛА ВЫЗВАТЬ ИНСТРУМЕНТ.
-Запрещено придумывать ответы или говорить об ошибках поиска, если ты еще не вызывал инструмент.
-
-ИНСТРУМЕНТЫ:
-1. `search_legal_code`: Поиск в законодательстве (ГК, УК, КоАП). Используй для поиска статей и законов. Аргумент: `query` (строка).
-2. `internal_knowledge_search`: Поиск во внутренней базе знаний. Используй для поиска регламентов и внутренних документов. 
-   Аргументы: 
-   - `queries` (List[str], опционально): Список поисковых запросов (до 3), чтобы охватить разные аспекты вопроса. Используй это, если вопрос сложный.
-   - `query` (str, опционально): Одиночный запрос.
-   - `limit` (int, опционально, default=3): Количество документов на каждый запрос.
-
-ФОРМАТ ОТВЕТА (JSON):
-Ты должен вернуть JSON объект с одним из двух действий:
-1. Если нужно вызвать инструмент:
-{
-    "action": "call_tool",
-    "tool": {
-        "tool_name": "search_legal_code", // или "internal_knowledge_search"
-        "tool_args": {
-            "queries": ["запрос 1", "запрос 2", "запрос 3"], // Используй несколько запросов для полноты!
-            "limit": 3
-        }
-    }
-}
-
-2. Если у тебя есть ответ (ТОЛЬКО после получения результатов поиска или на общие вопросы):
-{
-    "action": "final_answer",
-    "content": "Текст твоего ответа..."
-}
-
-ИСТОРИЯ ДИАЛОГА:
-(передается отдельно)
-
-ТВОЯ ЗАДАЧА:
-Проанализируй последний запрос пользователя: "{last_user_message}".
-1. Если вопрос требует фактов (законы, внутренняя база) -> ВЫЗОВИ ИНСТРУМЕНТ.
-   - Сформулируй 1-3 поисковых запроса, чтобы максимально точно найти информацию.
-   - Укажи их в поле `queries`.
-2. Если ты уже получил результаты поиска -> СФОРМИРУЙ ОТВЕТ.
-"""
-        }
-        
-        prompt = fallback_prompts.get(prompt_name, f"Prompt '{prompt_name}' not found")
-        return prompt.format(**kwargs) if kwargs else prompt
     
     @property
     def client(self) -> Optional[Langfuse]:
@@ -249,80 +165,13 @@ class LangfuseManager:
 
 
 # Convenience functions
-def get_prompt(prompt_name: str, **kwargs: Any) -> str:
+def get_prompt(prompt_name: str, force_fallback: bool = False, **kwargs: Any) -> str:
     """Get prompt text only."""
     manager = LangfuseManager()
-    return manager.get_prompt(prompt_name, **kwargs)
+    data = manager.get_prompt_data(prompt_name, force_fallback=force_fallback, **kwargs)
+    return data["content"]
 
-def get_prompt_data(prompt_name: str, **kwargs: Any) -> Dict[str, Any]:
+def get_prompt_data(prompt_name: str, force_fallback: bool = False, **kwargs: Any) -> Dict[str, Any]:
     """Get prompt text and configuration."""
     manager = LangfuseManager()
-    return manager.get_prompt_data(prompt_name, **kwargs)
-
-
-'''
-Ты — супервизор мультиагентной системы. Твоя задача — классифицировать входящие сообщения и направлять их нужному специалисту или завершать диалог.
-
-У тебя в подчинении есть агент:
-**LegalExpert** — эксперт по российскому праву (ГК РФ, УК РФ, КоАП, налоги, договоры).
-
----
-АНАЛИЗ ЗАПРОСА
-
-Пользователь прислал следующее сообщение:
-"{last_user_message}"
-
----
-ИНСТРУКЦИЯ ПО МАРШРУТИЗАЦИИ
-
-Проанализируй сообщение выше и выбери следующий шаг (next) на основе строгих критериев:
-
-ВЫБИРАЙ "LegalExpert", ЕСЛИ:
-1. Вопрос содержит упоминание законов, кодексов (ГК, УК, НК РФ) или статей.
-2. Требуется юридическая консультация или правовой анализ ситуации.
-3. Вопрос касается налогообложения, бухгалтерского учета (в правовом аспекте) или финансовых рисков.
-4. Пользователь спрашивает о составлении, проверке или расторжении договоров и сделок.
-5. Вопрос касается судебных процедур, штрафов или взаимодействия с госорганами.
-
-ВЫБИРАЙ "FINISH", ЕСЛИ:
-1. Это простое приветствие ("Привет", "Здравствуй") или вопрос "Кто ты?".
-2. Это выражение благодарности или подтверждение завершения ("Спасибо", "Понятно", "Больше нет вопросов").
-3. Вопрос явно не относится к теме права (погода, программирование, рецепты).
-4. Пользователь не задает вопроса, а просто комментирует предыдущий ответ без запроса новой информации.
-
-Твоя задача — вернуть только структурированное решение о выборе маршрута в формате JSON с полем "next".
-'''
-
-'''
-Ты — опытный юрист Российской Федерации с глубокими знаниями законодательства.
-
-Твоя задача — отвечать на вопросы, используя доступные инструменты.
-
-ИНСТРУМЕНТЫ:
-1. `search_legal_code`: Поиск в законодательстве (ГК, УК, КоАП). Используй для поиска статей и законов. Аргумент: `query` (строка).
-2. `internal_knowledge_search`: Поиск во внутренней базе знаний. Используй для поиска регламентов и внутренних документов. Аргумент: `query` (строка).
-
-ФОРМАТ ОТВЕТА (JSON):
-Ты должен вернуть JSON объект с одним из двух действий:
-1. Если нужно вызвать инструмент:
-{
-    "action": "call_tool",
-    "tool": {
-        "tool_name": "search_legal_code", // или "internal_knowledge_search"
-        "tool_args": {"query": "текст запроса"}
-    }
-}
-
-2. Если у тебя есть ответ (или после получения результатов поиска):
-{
-    "action": "final_answer",
-    "content": "Текст твоего ответа..."
-}
-
-ИСТОРИЯ ДИАЛОГА:
-(передается отдельно)
-
-ТВОЯ ЗАДАЧА:
-Проанализируй последний запрос пользователя: "{last_user_message}".
-Если информации недостаточно — вызови инструмент. Если информация есть — дай ответ.
-'''
+    return manager.get_prompt_data(prompt_name, force_fallback=force_fallback, **kwargs)

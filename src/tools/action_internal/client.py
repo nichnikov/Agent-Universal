@@ -7,10 +7,10 @@ import httpx
 
 from .schemas import SearchItem, SearchParams, SearchResult
 
-DOC_API_URL = os.getenv("DOC_API_URL") #, "https://site-backend-ss.prod.ss.aservices.tech/api/v1/desktop/document_get-by-id")
+DOC_API_URL = os.getenv("DOC_API_URL", "https://site-backend-ss.prod.ss.aservices.tech/api/v1/desktop/document_get-by-id")
 
-INTERNAL_GATEWAY_API_URL = os.getenv("INTERNAL_GATEWAY_API_URL") #, "https://internal-gateway-backend-ss.prod.ss.aservices.tech/api/v1/content/part-doc_get")
-INTERNAL_GATEWAY_TOKEN = os.getenv("INTERNAL_GATEWAY_TOKEN") #, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJwbGF0IiwiaXNzIjoi0JzQtdC00LjQsNCz0YDRg9C_0L_QsCDQkNC60YLQuNC-0L0t0JzQptCk0K3QoCIsImF1ZCI6InBsYXQifQ.LZ4Ps4Zrq9JAL8abpKmLQbzsTP2g3NdXmb4tbIGD6MQ")
+INTERNAL_GATEWAY_API_URL = os.getenv("INTERNAL_GATEWAY_API_URL", "https://internal-gateway-backend-ss.prod.ss.aservices.tech/api/v1/content/part-doc_get")
+INTERNAL_GATEWAY_TOKEN = os.getenv("INTERNAL_GATEWAY_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJwbGF0IiwiaXNzIjoi0JzQtdC00LjQsNCz0YDRg9C_0L_QsCDQkNC60YLQuNC-0L0t0JzQptCk0K3QoCIsImF1ZCI6InBsYXQifQ.LZ4Ps4Zrq9JAL8abpKmLQbzsTP2g3NdXmb4tbIGD6MQ")
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -147,7 +147,7 @@ class SearchClient:
         timeout_cfg = httpx.Timeout(self.timeout)
 
         async with httpx.AsyncClient(
-            headers=HEADERS, limits=limits, timeout=timeout_cfg, follow_redirects=True, http2=True
+            headers=HEADERS, limits=limits, timeout=timeout_cfg, follow_redirects=True, http2=True, verify=False
         ) as client:
             pages_json = await self._search_pages(
                 client=client,

@@ -21,7 +21,7 @@ class RouteResponse(BaseModel):
     Модель для структурированного ответа супервизора.
     Гарантирует строгий выбор маршрута.
     """
-    next: Literal["LegalExpert", "FINISH"]
+    next: Literal["LegalExpert", "AccountingExpert", "FINISH"]
 
 
 
@@ -79,7 +79,7 @@ async def supervisor_node(state: AgentState, config: RunnableConfig) -> Dict[str
             if last_user_message:
                 # Вся логика и критерии теперь внутри промта в Langfuse.
                 # Мы просто передаем переменную last_user_message.
-                prompt_data = get_prompt_data("supervisor-system-prompt", last_user_message=last_user_message)
+                prompt_data = get_prompt_data("supervisor-system-prompt", force_fallback=True, last_user_message=last_user_message)
                 analysis_prompt = prompt_data["content"]
                 # Обновляем конфиг, если он пришел с промтом
                 if prompt_data.get("config"):

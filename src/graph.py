@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from .state import AgentState
 from .nodes.supervisor import supervisor_node
 from .nodes.legal_expert import legal_expert_node
+from .nodes.accounting_expert import accounting_expert_node
 
 
 def create_agent_graph():
@@ -23,9 +24,10 @@ def create_agent_graph():
     # Добавляем узлы
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("legal_expert", legal_expert_node)
+    workflow.add_node("accounting_expert", accounting_expert_node)
     
     # Определяем функцию для условного ребра от supervisor
-    def route_supervisor(state: AgentState) -> Literal["legal_expert", "__end__"]:
+    def route_supervisor(state: AgentState) -> Literal["legal_expert", "accounting_expert", "__end__"]:
         """
         Маршрутизация от supervisor на основе поля 'next' в состоянии.
         
@@ -39,13 +41,16 @@ def create_agent_graph():
         
         if next_step == "LegalExpert":
             return "legal_expert"
+        elif next_step == "AccountingExpert":
+            return "accounting_expert"
         else:
             # Для всех остальных случаев (включая "FINISH") завершаем
             return "__end__"
     
     # Добавляем ребра
-    # От legal_expert всегда возвращаемся к supervisor для проверки завершения
+    # От экспертов всегда возвращаемся к supervisor для проверки завершения
     workflow.add_edge("legal_expert", "supervisor")
+    workflow.add_edge("accounting_expert", "supervisor")
     
     # От supervisor используем условное ребро
     workflow.add_conditional_edges(
@@ -53,6 +58,7 @@ def create_agent_graph():
         route_supervisor,
         {
             "legal_expert": "legal_expert",
+            "accounting_expert": "accounting_expert",
             "__end__": END
         }
     )
