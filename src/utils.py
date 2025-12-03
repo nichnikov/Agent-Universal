@@ -14,17 +14,16 @@ T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_PROXY_URL = "http://llm-audit-proxy-ml.prod.ml.aservices.tech/v1"
 
-def create_structured_llm(response_model: Type[T], config: Dict[str, Any] = None) -> Any:
+def create_llm(config: Dict[str, Any] = None) -> Any:
     """
-    Создает LLM с structured output (возвращает объект Pydantic).
-    Универсальная фабрика для всех агентов.
+    Создает простой LLM (ChatOpenAI) без structured output.
+    Используется для вспомогательных задач (например, фильтрация).
     
     Args:
-        response_model: Pydantic модель, описывающая структуру ответа
         config: Конфигурация модели (из Langfuse или fallback)
     
     Returns:
-        Configured LLM with structured output
+        Configured ChatOpenAI instance
     """
     # Значения по умолчанию
     model_name = "gpt-4o"
@@ -60,11 +59,27 @@ def create_structured_llm(response_model: Type[T], config: Dict[str, Any] = None
     if llm is None:
          # Fallback initialization
          llm = ChatOpenAI(
-             model=model_name, # Используем model_name, который мог быть обновлен из config
+             model=model_name, 
              temperature=temperature,
              base_url=base_url
          )
+         
+    return llm
+
+
+def create_structured_llm(response_model: Type[T], config: Dict[str, Any] = None) -> Any:
+    """
+    Создает LLM с structured output (возвращает объект Pydantic).
+    Универсальная фабрика для всех агентов.
     
+    Args:
+        response_model: Pydantic модель, описывающая структуру ответа
+        config: Конфигурация модели (из Langfuse)
+    
+    Returns:
+        Configured LLM with structured output
+    """
+    llm = create_llm(config)
     return llm.with_structured_output(response_model)
 
 

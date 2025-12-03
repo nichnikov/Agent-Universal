@@ -58,7 +58,9 @@ FALLBACK_PROMPTS: Dict[str, PromptData] = {
     },
 
     "legal-expert-prompt": {
-        "content": """Ты — опытный юрист Российской Федерации.
+        "content": """Output ONLY JSON. Do not include any introductory text or markdown formatting (like ```json).
+
+Ты — опытный юрист Российской Федерации.
 
 КРИТИЧЕСКИ ВАЖНО: Твои ответы ДОЛЖНЫ строиться СТРОГО на материалах, найденных во внутренней базе знаний. 
 ЗАПРЕЩЕНО давать ответы без предварительного поиска в базе знаний.
@@ -125,7 +127,9 @@ FALLBACK_PROMPTS: Dict[str, PromptData] = {
     },
 
     "accounting-expert-prompt": {
-        "content": """Ты — опытный бухгалтер-эксперт.
+        "content": """Output ONLY JSON. Do not include any introductory text or markdown formatting (like ```json).
+
+Ты — опытный бухгалтер-эксперт.
 Твоя задача — отвечать на вопросы по бухгалтерскому учету, налогам и отчетности (ПБУ, ФСБУ, НК РФ).
 
 КРИТИЧЕСКИ ВАЖНО: Твои ответы ДОЛЖНЫ строиться СТРОГО на материалах, найденных во внутренней базе знаний (Система Главбух).
@@ -188,6 +192,22 @@ FALLBACK_PROMPTS: Dict[str, PromptData] = {
 """,
         "config": {
             "model": "gpt-4o",
+            "temperature": 0.0
+        }
+    },
+
+    "filter_results_prompt": {
+        "content": """Analyze the following text fragment found for the search query: "{query}".
+Your task is to extract MINIMAL fragments that strictly answer the question.
+If the text contains relevant information, return ONLY these fragments (as is, quotes).
+If the text does NOT contain an answer to the question, return "DOES NOT CONTAIN ANSWER".
+
+Text:
+{text}
+
+Output only the relevant text fragments or "DOES NOT CONTAIN ANSWER". Do not add any comments.""",
+        "config": {
+            "model": "gpt-4o-mini",
             "temperature": 0.0
         }
     }

@@ -24,3 +24,8 @@ class AgentState(TypedDict):
     # {query: [{title, url, content}]}
     # Используем перезапись (не append), чтобы хранить только актуальные результаты последнего поиска
     search_results: Optional[Dict[str, List[Dict[str, Any]]]]
+
+    # Релевантные материалы, отфильтрованные через LLM
+    # Структура такая же как у search_results: {query: [{title, url, content}]}
+    # content здесь содержит только выбранные фрагменты
+    relevant_materials: Optional[Dict[str, List[Dict[str, Any]]]]
