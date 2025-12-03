@@ -3,7 +3,7 @@ State management for the Universal Autonomous Agent.
 Defines the global state structure passed between graph nodes.
 """
 
-from typing import Annotated, Sequence, TypedDict
+from typing import Annotated, Sequence, TypedDict, Optional, Dict, List, Any
 from langchain_core.messages import BaseMessage
 import operator
 
@@ -19,3 +19,8 @@ class AgentState(TypedDict):
     
     # Указатель на следующий шаг (имя узла или "FINISH")
     next: str
+
+    # Результаты поиска для использования в промптах
+    # {query: [{title, url, content}]}
+    # Используем перезапись (не append), чтобы хранить только актуальные результаты последнего поиска
+    search_results: Optional[Dict[str, List[Dict[str, Any]]]]

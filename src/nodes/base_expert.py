@@ -34,6 +34,8 @@ async def execute_expert_node(
     """
     try:
         messages = state["messages"]
+        # Получаем сохраненные результаты поиска из состояния, если они есть
+        final_search_results = state.get("search_results")
         
         last_user_message = None
         for msg in reversed(messages):
@@ -61,151 +63,7 @@ async def execute_expert_node(
         
         new_messages = []
         
-        # ВАЛИДАЦИЯ: Проверяем, что эксперт не пытается дать ответ без предварительного поиска
-        # Ищем в истории диалога результаты поиска
-        has_search_results = False
-        for msg in messages:
-            if isinstance(msg, HumanMessage) and msg.content:
-                if "Результат выполнения инструмента" in msg.content and "internal_knowledge_search" in msg.content:
-                    has_search_results = True
-                    break
-        
-        # Если эксперт пытается дать final_answer без предварительного поиска - принудительно вызываем инструмент
-        if response.action == "final_answer" and not has_search_results:
-            print("WARNING: Agent attempted to give final_answer without search. Forcing tool call.")
-            # Принудительно вызываем инструмент напрямую, минуя структурированную модель
-            if last_user_message:
-                # Формируем поисковый запрос из вопроса пользователя
-                search_query = last_user_message[:200]  # Берем первые 200 символов как запрос
-                tool_name = "internal_knowledge_search"
-                tool = tools_map.get(tool_name)
-                
-                if tool:
-                    print(f"DEBUG Agent: Forced tool call with query: {search_query}")
-                    # Вызываем инструмент напрямую
-                    # Используем значения из промпта (должны быть указаны в промпте)
-                    # Для принудительного вызова используем значения по умолчанию из промпта
-                    tool_args = {"queries": [search_query], "limit": 5}  # Значение из промпта
-                    try:
-                        if hasattr(tool, "ainvoke"):
-                            tool_result = await tool.ainvoke(tool_args, config=config)
-                        else:
-                            tool_result = tool.invoke(tool_args, config=config)
-                        
-                        # Логируем результаты поиска
-                        if "search" in tool_name:
-                            parse_and_log_search_results(tool_result)
-                            
-                            # Логируем структурированные результаты в Langfuse
-                            try:
-                                if hasattr(tool, 'get_last_search_results'):
-                                    structured_results = tool.get_last_search_results()
-                                    if structured_results:
-                                        # Логируем в консоль для отладки (ГАРАНТИРОВАННО)
-                                        import json
-                                        print(f"\nDEBUG: Structured Search Results for Langfuse (Forced):\n{json.dumps(structured_results, ensure_ascii=False, indent=2)}\n")
-
-                                        trace_id = None
-                                        if config and "callbacks" in config:
-                                            callbacks_obj = config["callbacks"]
-                                            handlers = []
-                                            if isinstance(callbacks_obj, list):
-                                                handlers = callbacks_obj
-                                            elif hasattr(callbacks_obj, 'handlers'):
-                                                handlers = callbacks_obj.handlers
-                                                
-                                            for callback in handlers:
-                                                if hasattr(callback, 'get_trace_id'):
-                                                    try:
-                                                        trace_id = callback.get_trace_id()
-                                                        break
-                                                    except:
-                                                        pass
-                                                if hasattr(callback, 'run_manager') and hasattr(callback.run_manager, 'run_id'):
-                                                    try:
-                                                        if hasattr(callback.run_manager, 'parent_run_id'):
-                                                            trace_id = callback.run_manager.parent_run_id
-                                                        break
-                                                    except:
-                                                        pass
-                                        
-                                        langfuse_manager = LangfuseManager()
-                                        if langfuse_manager.client:
-                                            try:
-                                                event_params = {
-                                                    "name": "search_results_structured",
-                                                    "metadata": {"search_results": structured_results}
-                                                }
-                                                if trace_id:
-                                                    event_params["trace_id"] = trace_id
-                                                
-                                                langfuse_manager.client.event(**event_params)
-                                            except Exception as e:
-                                                print(f"Warning: Could not log structured results to Langfuse: {e}")
-                            except Exception as e:
-                                print(f"Warning: Error logging structured results: {e}")
-                        
-                        # Получаем структурированные результаты поиска для включения в промпт
-                        search_materials_text = ""
-                        if hasattr(tool, 'get_last_search_results'):
-                            structured_results = tool.get_last_search_results()
-                            if structured_results:
-                                # Формируем текстовое представление материалов для промпта
-                                materials_list = []
-                                for query, docs in structured_results.items():
-                                    materials_list.append(f"\nПоисковый запрос: {query}")
-                                    for idx, doc in enumerate(docs, 1):
-                                        materials_list.append(
-                                            f"\nМатериал {idx}:"
-                                            f"\n  Наименование: {doc.get('title', 'Без названия')}"
-                                            f"\n  URL: {doc.get('url', 'Нет URL')}"
-                                            f"\n  Содержание:\n{doc.get('content', '')[:2000]}..."  # Ограничиваем длину
-                                        )
-                                search_materials_text = "\n".join(materials_list)
-                        
-                        # Формируем обновленный системный промпт с материалами
-                        updated_system_prompt = system_prompt
-                        if search_materials_text:
-                            updated_system_prompt = f"""{system_prompt}
-
-НАЙДЕННЫЕ МАТЕРИАЛЫ ИЗ ВНУТРЕННЕЙ БАЗЫ ЗНАНИЙ:
-{search_materials_text}
-
-КРИТИЧЕСКИ ВАЖНО: Твой ответ должен строиться СТРОГО на основе этих найденных материалов. 
-Используй ТОЛЬКО информацию из материалов выше. Запрещено добавлять информацию, которой нет в найденных материалах.
-В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (укажи наименования из раздела "Наименование" выше).
-"""
-                        
-                        # Теперь формируем сообщение с результатами и просим LLM дать ответ
-                        tool_result_message = HumanMessage(
-                            content=f"Результат выполнения инструмента {tool_name}:\n{str(tool_result)}\n\nКРИТИЧЕСКИ ВАЖНО: Теперь дай финальный ответ, используя СТРОГО ТОЛЬКО информацию из результатов поиска выше. Запрещено добавлять информацию, которой нет в найденных материалах. В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе."
-                        )
-                        
-                        # Обновляем системный промпт в сообщениях
-                        updated_messages = [HumanMessage(content=updated_system_prompt)] + messages + [tool_result_message]
-                        final_response = await llm.ainvoke(updated_messages, config=config)
-                        
-                        if final_response.content:
-                            final_content = final_response.content
-                            if hasattr(final_response, 'references') and final_response.references:
-                                refs = "\n".join([f"- {r}" for r in final_response.references])
-                                final_content += f"\n\nИспользованные материалы:\n{refs}"
-                            new_messages.append(AIMessage(content=final_content))
-                        else:
-                            new_messages.append(AIMessage(content="Извините, не удалось сформировать ответ после поиска."))
-                        
-                        return {
-                            "messages": new_messages
-                        }
-                    except Exception as e:
-                        print(f"Error executing forced tool call: {e}")
-                        new_messages.append(AIMessage(content=f"Ошибка при выполнении поиска: {str(e)}"))
-                        return {
-                            "messages": new_messages
-                        }
-                else:
-                    print(f"ERROR: Tool '{tool_name}' not found in tools_map")
-        
+        # Логика выполнения инструмента
         if response.action == "call_tool" and response.tool:
             tool_name = response.tool.tool_name
             # Преобразуем модель Pydantic обратно в dict для вызова инструмента
@@ -231,13 +89,23 @@ async def execute_expert_node(
                          
                          # Логируем структурированные результаты в Langfuse
                          try:
-                             # Пытаемся получить структурированные результаты из инструмента
                              if hasattr(tool, 'get_last_search_results'):
                                  structured_results = tool.get_last_search_results()
                                  if structured_results:
+                                     # Обновляем результаты поиска в переменной состояния
+                                     final_search_results = structured_results
+                                     
                                      # Логируем в консоль для отладки (ГАРАНТИРОВАННО)
                                      import json
-                                     print(f"\nDEBUG: Structured Search Results for Langfuse:\n{json.dumps(structured_results, ensure_ascii=False, indent=2)}\n")
+                                     # Формируем список объектов для вывода, как просил пользователь
+                                     log_output = []
+                                     for q, d in structured_results.items():
+                                         log_output.append({
+                                             "query": q,
+                                             "search_results": d
+                                         })
+                                     
+                                     print(f"\nDEBUG: Structured Search Results for Langfuse:\n{json.dumps(log_output, ensure_ascii=False, indent=2)}\n")
 
                                      # Пытаемся получить trace_id из callback
                                      trace_id = None
@@ -272,9 +140,17 @@ async def execute_expert_node(
                                      langfuse_manager = LangfuseManager()
                                      if langfuse_manager.client:
                                          try:
+                                             # Формируем список объектов для метаданных Langfuse
+                                             log_output = []
+                                             for q, d in structured_results.items():
+                                                 log_output.append({
+                                                     "query": q,
+                                                     "search_results": d
+                                                 })
+                                             
                                              event_params = {
                                                  "name": "search_results_structured",
-                                                 "metadata": {"search_results": structured_results}
+                                                 "metadata": {"search_results": log_output}
                                              }
                                              if trace_id:
                                                  event_params["trace_id"] = trace_id
@@ -290,23 +166,21 @@ async def execute_expert_node(
             
             print(f"DEBUG Agent: Raw Tool Result Preview (first 200 chars): {str(tool_result)[:200]}...")
             
-            # Получаем структурированные результаты поиска для включения в промпт
+            # Получаем структурированные результаты поиска (из переменной или состояния) для включения в промпт
             search_materials_text = ""
-            if tool and "search" in tool_name and hasattr(tool, 'get_last_search_results'):
-                structured_results = tool.get_last_search_results()
-                if structured_results:
-                    # Формируем текстовое представление материалов для промпта
-                    materials_list = []
-                    for query, docs in structured_results.items():
-                        materials_list.append(f"\nПоисковый запрос: {query}")
-                        for idx, doc in enumerate(docs, 1):
-                            materials_list.append(
-                                f"\nМатериал {idx}:"
-                                f"\n  Наименование: {doc.get('title', 'Без названия')}"
-                                f"\n  URL: {doc.get('url', 'Нет URL')}"
-                                f"\n  Содержание:\n{doc.get('content', '')[:2000]}..."  # Ограничиваем длину
-                            )
-                    search_materials_text = "\n".join(materials_list)
+            if final_search_results:
+                # Формируем текстовое представление материалов для промпта
+                materials_list = []
+                for query, docs in final_search_results.items():
+                    materials_list.append(f"\nПоисковый запрос: {query}")
+                    for idx, doc in enumerate(docs, 1):
+                        materials_list.append(
+                            f"\nМатериал {idx}:"
+                            f"\n  Наименование: {doc.get('title', 'Без названия')}"
+                            f"\n  URL: {doc.get('url', 'Нет URL')}"
+                            f"\n  Содержание:\n{doc.get('content', '')[:2000]}..."  # Ограничиваем длину
+                        )
+                search_materials_text = "\n".join(materials_list)
             
             # Формируем обновленный системный промпт с материалами
             updated_system_prompt = system_prompt
@@ -348,8 +222,10 @@ async def execute_expert_node(
         else:
             new_messages.append(AIMessage(content="Извините, я не смог определить дальнейшие действия."))
         
+        # Возвращаем обновленное состояние, включая результаты поиска
         return {
-            "messages": new_messages
+            "messages": new_messages,
+            "search_results": final_search_results
         }
         
     except Exception as e:
@@ -361,4 +237,3 @@ async def execute_expert_node(
         return {
             "messages": [error_response]
         }
-
