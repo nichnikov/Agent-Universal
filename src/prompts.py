@@ -197,15 +197,15 @@ FALLBACK_PROMPTS: Dict[str, PromptData] = {
     },
 
     "filter_results_prompt": {
-        "content": """Analyze the following text fragment found for the search query: "{query}".
-Your task is to extract MINIMAL fragments that strictly answer the question.
-If the text contains relevant information, return ONLY these fragments (as is, quotes).
-If the text does NOT contain an answer to the question, return "DOES NOT CONTAIN ANSWER".
+        "content": """Проанализируй следующий фрагмент текста, найденный по поисковому запросу: "{query}".
+Твоя задача — извлечь МИНИМАЛЬНОЕ количество фрагментов, которые строго отвечают на вопрос.
+Если текст содержит релевантную информацию, верни ТОЛЬКО эти фрагменты (как есть, в кавычках).
+Если текст НЕ содержит ответа на вопрос, верни "НЕ СОДЕРЖИТ ОТВЕТА".
 
-Text:
+Текст:
 {text}
 
-Output only the relevant text fragments or "DOES NOT CONTAIN ANSWER". Do not add any comments.""",
+Выведи только релевантные фрагменты текста или "НЕ СОДЕРЖИТ ОТВЕТА". Никакие комментарии не добавляйте.""",
         "config": {
             "model": "gpt-4o-mini",
             "temperature": 0.0
