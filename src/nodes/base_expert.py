@@ -15,7 +15,7 @@ from ..logging_utils import parse_and_log_search_results
 
 class ToolArgs(BaseModel):
     queries: Optional[List[str]] = None
-    limit: Optional[int] = 3
+    limit: Optional[int] = None
     query: Optional[str] = None
     
     class Config:
@@ -42,7 +42,7 @@ async def execute_expert_node(
                 break
         
         prompt_context = {"last_user_message": last_user_message} if last_user_message else {}
-        prompt_data = get_prompt_data(prompt_name, **prompt_context)
+        prompt_data = get_prompt_data(prompt_name, force_fallback=True, **prompt_context)
         system_prompt = prompt_data["content"]
         model_config = prompt_data.get("config", {})
         
@@ -83,7 +83,9 @@ async def execute_expert_node(
                 if tool:
                     print(f"DEBUG Agent: Forced tool call with query: {search_query}")
                     # Вызываем инструмент напрямую
-                    tool_args = {"queries": [search_query], "limit": 3}
+                    # Используем значения из промпта (должны быть указаны в промпте)
+                    # Для принудительного вызова используем значения по умолчанию из промпта
+                    tool_args = {"queries": [search_query], "limit": 5}  # Значение из промпта
                     try:
                         if hasattr(tool, "ainvoke"):
                             tool_result = await tool.ainvoke(tool_args, config=config)
@@ -99,10 +101,20 @@ async def execute_expert_node(
                                 if hasattr(tool, 'get_last_search_results'):
                                     structured_results = tool.get_last_search_results()
                                     if structured_results:
+                                        # Логируем в консоль для отладки (ГАРАНТИРОВАННО)
+                                        import json
+                                        print(f"\nDEBUG: Structured Search Results for Langfuse (Forced):\n{json.dumps(structured_results, ensure_ascii=False, indent=2)}\n")
+
                                         trace_id = None
                                         if config and "callbacks" in config:
-                                            callbacks = config["callbacks"]
-                                            for callback in callbacks:
+                                            callbacks_obj = config["callbacks"]
+                                            handlers = []
+                                            if isinstance(callbacks_obj, list):
+                                                handlers = callbacks_obj
+                                            elif hasattr(callbacks_obj, 'handlers'):
+                                                handlers = callbacks_obj.handlers
+                                                
+                                            for callback in handlers:
                                                 if hasattr(callback, 'get_trace_id'):
                                                     try:
                                                         trace_id = callback.get_trace_id()
@@ -223,11 +235,22 @@ async def execute_expert_node(
                              if hasattr(tool, 'get_last_search_results'):
                                  structured_results = tool.get_last_search_results()
                                  if structured_results:
+                                     # Логируем в консоль для отладки (ГАРАНТИРОВАННО)
+                                     import json
+                                     print(f"\nDEBUG: Structured Search Results for Langfuse:\n{json.dumps(structured_results, ensure_ascii=False, indent=2)}\n")
+
                                      # Пытаемся получить trace_id из callback
                                      trace_id = None
                                      if config and "callbacks" in config:
-                                         callbacks = config["callbacks"]
-                                         for callback in callbacks:
+                                         callbacks_obj = config["callbacks"]
+                                         handlers = []
+                                         # Проверяем тип callbacks - это может быть список или менеджер
+                                         if isinstance(callbacks_obj, list):
+                                             handlers = callbacks_obj
+                                         elif hasattr(callbacks_obj, 'handlers'):
+                                              handlers = callbacks_obj.handlers
+                                         
+                                         for callback in handlers:
                                              # Пытаемся получить trace_id из Langfuse callback
                                              if hasattr(callback, 'get_trace_id'):
                                                  try:
@@ -245,12 +268,10 @@ async def execute_expert_node(
                                                  except:
                                                      pass
                                      
-                                     # Логируем через Langfuse client
+                                    # Логируем через Langfuse client
                                      langfuse_manager = LangfuseManager()
                                      if langfuse_manager.client:
                                          try:
-                                             # Создаем event для логирования структурированных результатов
-                                             # Формат: поисковый запрос: [{"title": ..., "url": ..., "content": ...}, ...]
                                              event_params = {
                                                  "name": "search_results_structured",
                                                  "metadata": {"search_results": structured_results}

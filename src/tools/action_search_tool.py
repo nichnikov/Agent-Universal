@@ -26,11 +26,11 @@ class KnowledgeSearchInput(BaseModel):
     )
     queries: Optional[List[str]] = Field(
         None,
-        description="List of search queries (up to 3) to run in parallel. Use this for comprehensive coverage."
+        description="List of search queries to run in parallel. Use this for comprehensive coverage. The number of queries should be specified in the prompt instructions."
     )
-    limit: int = Field(
-        3, 
-        description="Maximum number of documents to retrieve. Defaults to 3. Increase only if comprehensive search is needed."
+    limit: Optional[int] = Field(
+        None, 
+        description="Maximum number of documents to retrieve per query. This value should be specified in the prompt instructions and will be passed from there."
     )
     pub_alias: Optional[str] = Field(
         None,
@@ -139,7 +139,7 @@ class KnowledgeSearchTool(BaseTool):
             "documents": structured_docs
         }
 
-    async def _arun(self, query: Optional[str] = None, queries: Optional[List[str]] = None, limit: int = 3, pub_alias: Optional[str] = None) -> str:
+    async def _arun(self, query: Optional[str] = None, queries: Optional[List[str]] = None, limit: Optional[int] = None, pub_alias: Optional[str] = None) -> str:
         """
         Executes the search and returns formatted document contents.
         Supports single 'query' or multiple 'queries'.
@@ -157,15 +157,19 @@ class KnowledgeSearchTool(BaseTool):
             if not search_queries:
                 return "Error: No search queries provided. Please provide 'query' or 'queries'."
 
+            # Используем значение limit из промпта, если оно не указано - используем значение по умолчанию
+            # Значение по умолчанию должно быть указано в промпте, но на случай если не передано - используем 5
+            effective_limit = limit if limit is not None else 5
+            
             # Запускаем поиск параллельно
-            tasks = [self._execute_single_search(q, limit, pub_alias) for q in search_queries]
+            tasks = [self._execute_single_search(q, effective_limit, pub_alias) for q in search_queries]
             results_list = await asyncio.gather(*tasks)
             
             # Объединяем результаты
             all_formatted_outputs = []
             
             # Добавляем метаданные поиска
-            metadata_header = f"SEARCH METADATA:\nQueries: {search_queries}\nLimit per query: {limit}\nPubDivID: {self._default_pubdivid}\n---\n"
+            metadata_header = f"SEARCH METADATA:\nQueries: {search_queries}\nLimit per query: {effective_limit}\nPubDivID: {self._default_pubdivid}\n---\n"
             all_formatted_outputs.append(metadata_header)
 
             for res in results_list:
