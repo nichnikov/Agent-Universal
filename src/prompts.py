@@ -1,10 +1,19 @@
 """
 Fallback prompts for development when Langfuse is not available.
 These prompts are used as a backup when Langfuse client is unavailable or when force_fallback=True.
+Includes model configuration for each prompt.
 """
 
-FALLBACK_PROMPTS = {
-    "supervisor-system-prompt": """Ты — супервизор мультиагентной системы. Твоя задача — классифицировать входящие сообщения и направлять их нужному специалисту или завершать диалог.
+from typing import Dict, Any, TypedDict, Optional
+
+class PromptData(TypedDict):
+    content: str
+    config: Dict[str, Any]
+
+# Структура: имя_промпта -> {content: "...", config: {...}}
+FALLBACK_PROMPTS: Dict[str, PromptData] = {
+    "supervisor-system-prompt": {
+        "content": """Ты — супервизор мультиагентной системы. Твоя задача — классифицировать входящие сообщения и направлять их нужному специалисту или завершать диалог.
 
 У тебя в подчинении есть агенты:
 1. **LegalExpert** — эксперт по российскому праву (ГК РФ, УК РФ, КоАП, договоры, судебные споры).
@@ -42,8 +51,14 @@ FALLBACK_PROMPTS = {
 
 Твоя задача — вернуть только структурированное решение о выборе маршрута в формате JSON с полем "next".
 """,
+        "config": {
+            "model": "gpt-4o",
+            "temperature": 0.0
+        }
+    },
 
-    "legal-expert-prompt": """Ты — опытный юрист Российской Федерации.
+    "legal-expert-prompt": {
+        "content": """Ты — опытный юрист Российской Федерации.
 
 КРИТИЧЕСКИ ВАЖНО: Твои ответы ДОЛЖНЫ строиться СТРОГО на материалах, найденных во внутренней базе знаний. 
 ЗАПРЕЩЕНО давать ответы без предварительного поиска в базе знаний.
@@ -103,8 +118,14 @@ FALLBACK_PROMPTS = {
 КРИТИЧЕСКИ ВАЖНО: При вызове инструмента internal_knowledge_search ты ОБЯЗАН сгенерировать ровно 4 поисковых запроса в поле 'queries'. 
 Каждый запрос должен охватывать разные аспекты вопроса пользователя. Не используй меньше или больше 4 запросов!
 """,
+        "config": {
+            "model": "gpt-4o",
+            "temperature": 0.0
+        }
+    },
 
-    "accounting-expert-prompt": """Ты — опытный бухгалтер-эксперт.
+    "accounting-expert-prompt": {
+        "content": """Ты — опытный бухгалтер-эксперт.
 Твоя задача — отвечать на вопросы по бухгалтерскому учету, налогам и отчетности (ПБУ, ФСБУ, НК РФ).
 
 КРИТИЧЕСКИ ВАЖНО: Твои ответы ДОЛЖНЫ строиться СТРОГО на материалах, найденных во внутренней базе знаний (Система Главбух).
@@ -164,24 +185,45 @@ FALLBACK_PROMPTS = {
 
 КРИТИЧЕСКИ ВАЖНО: При вызове инструмента internal_knowledge_search ты ОБЯЗАН сгенерировать ровно 4 поисковых запроса в поле 'queries'. 
 Каждый запрос должен охватывать разные аспекты вопроса пользователя. Не используй меньше или больше 4 запросов!
-"""
+""",
+        "config": {
+            "model": "gpt-4o",
+            "temperature": 0.0
+        }
+    }
 }
 
 
-def get_fallback_prompt(prompt_name: str, **kwargs) -> str:
+def get_fallback_prompt_data(prompt_name: str, **kwargs) -> Dict[str, Any]:
     """
-    Get fallback prompt by name with optional variable substitution.
+    Get fallback prompt data (content and config) by name.
     
     Args:
         prompt_name: Name of the prompt
         **kwargs: Variables to substitute in the prompt template
         
     Returns:
-        Formatted prompt string or error message if prompt not found
+        Dict containing "content" and "config"
     """
-    prompt = FALLBACK_PROMPTS.get(prompt_name)
-    if prompt is None:
-        return f"Prompt '{prompt_name}' not found"
+    prompt_data = FALLBACK_PROMPTS.get(prompt_name)
+    if prompt_data is None:
+        return {
+            "content": f"Prompt '{prompt_name}' not found",
+            "config": {}
+        }
     
-    return prompt.format(**kwargs) if kwargs else prompt
+    content = prompt_data["content"]
+    formatted_content = content.format(**kwargs) if kwargs else content
+    
+    return {
+        "content": formatted_content,
+        "config": prompt_data.get("config", {})
+    }
 
+
+def get_fallback_prompt(prompt_name: str, **kwargs) -> str:
+    """
+    Legacy wrapper for getting only prompt text.
+    """
+    data = get_fallback_prompt_data(prompt_name, **kwargs)
+    return data["content"]

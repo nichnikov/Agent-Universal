@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from langchain_core.runnables import RunnableConfig
 
 from ..state import AgentState
-from ..tools.accounting_tools import search_accounting_code
 from ..tools.action_search_tool import create_search_tool
 from .base_expert import execute_expert_node, ToolArgs
 

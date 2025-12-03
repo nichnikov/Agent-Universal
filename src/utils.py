@@ -8,7 +8,7 @@ from langfuse import Langfuse
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from .prompts import get_fallback_prompt
+from .prompts import get_fallback_prompt, get_fallback_prompt_data
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -21,7 +21,7 @@ def create_structured_llm(response_model: Type[T], config: Dict[str, Any] = None
     
     Args:
         response_model: Pydantic модель, описывающая структуру ответа
-        config: Конфигурация модели (из Langfuse)
+        config: Конфигурация модели (из Langfuse или fallback)
     
     Returns:
         Configured LLM with structured output
@@ -31,7 +31,7 @@ def create_structured_llm(response_model: Type[T], config: Dict[str, Any] = None
     temperature = 0.0
     base_url = os.getenv("LLM_BASE_URL", DEFAULT_PROXY_URL)
     
-    # Применяем конфиг из Langfuse
+    # Применяем конфиг из Langfuse или fallback
     if config:
         model_name = config.get("model", model_name)
         temperature = config.get("temperature", temperature)
@@ -60,7 +60,7 @@ def create_structured_llm(response_model: Type[T], config: Dict[str, Any] = None
     if llm is None:
          # Fallback initialization
          llm = ChatOpenAI(
-             model="gpt-4o", 
+             model=model_name, # Используем model_name, который мог быть обновлен из config
              temperature=temperature,
              base_url=base_url
          )
@@ -129,9 +129,10 @@ class LangfuseManager:
         """
         if self._langfuse_client is None or force_fallback:
             # Fallback prompts for development/testing (from prompts.py)
+            fallback_data = get_fallback_prompt_data(prompt_name, **kwargs)
             return {
-                "content": get_fallback_prompt(prompt_name, **kwargs),
-                "config": {},
+                "content": fallback_data["content"],
+                "config": fallback_data["config"],
                 "type": "text"
             }
         
@@ -152,9 +153,10 @@ class LangfuseManager:
         except Exception as e:
             print(f"Error loading prompt '{prompt_name}' from Langfuse: {e}")
             # Fallback to local prompts on error
+            fallback_data = get_fallback_prompt_data(prompt_name, **kwargs)
             return {
-                "content": get_fallback_prompt(prompt_name, **kwargs),
-                "config": {},
+                "content": fallback_data["content"],
+                "config": fallback_data["config"],
                 "type": "text"
             }
     
