@@ -1,8 +1,10 @@
 import uuid
+import os
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
+from langfuse.callback import CallbackHandler
 from src.graph import app as agent_app
 
 # Создаем приложение FastAPI
@@ -34,8 +36,25 @@ async def chat_endpoint(request: ChatRequest):
         # Генерируем thread_id, если не передан
         thread_id = request.thread_id or str(uuid.uuid4())
         
+        # Инициализируем Langfuse callback handler
+        # Он автоматически подхватит переменные окружения (LANGFUSE_PUBLIC_KEY, etc.)
+        # Проверяем наличие ключей, чтобы избежать ошибок инициализации, если они не заданы
+        callbacks = []
+        if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
+            try:
+                langfuse_handler = CallbackHandler(
+                    session_id=thread_id,
+                    user_id="user_api" # Можно параметризировать при необходимости
+                )
+                callbacks.append(langfuse_handler)
+            except Exception as e:
+                print(f"Warning: Failed to initialize Langfuse callback: {e}")
+        
         # Конфигурация для LangGraph
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": callbacks
+        }
         
         # Формируем входные данные
         inputs = {
@@ -65,5 +84,7 @@ async def chat_endpoint(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
+    # Запускаем сервер
+    # При запуске через docker-compose CMD уже вызывает uvicorn
+    # Этот блок нужен для локальной отладки
     uvicorn.run(app, host="0.0.0.0", port=8080)
-
