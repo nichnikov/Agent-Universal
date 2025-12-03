@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  agent-universal:
+    build: .
+    container_name: agent-universal
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      # Монтируем src и корневые файлы для разработки
+      - ./src:/app/src
+      - ./server.py:/app/server.py
+      - ./main.py:/app/main.py
+    restart: unless-stopped
