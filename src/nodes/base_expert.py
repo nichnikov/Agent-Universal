@@ -156,6 +156,68 @@ async def execute_expert_node(
                                          except Exception as e:
                                              print(f"Warning: Could not log structured results to Langfuse: {e}")
                                      
+                                     # === ЛОГИКА УДАЛЕНИЯ ДУБЛЕЙ ===
+                                     try:
+                                         seen_urls = set()
+                                         unique_structured_results = {}
+                                         
+                                         for query, docs in structured_results.items():
+                                             unique_docs = []
+                                             for doc in docs:
+                                                 url = doc.get("url")
+                                                 if url:
+                                                     if url not in seen_urls:
+                                                         seen_urls.add(url)
+                                                         unique_docs.append(doc)
+                                                 else:
+                                                     unique_docs.append(doc)
+                                             
+                                             if unique_docs:
+                                                 unique_structured_results[query] = unique_docs
+                                         
+                                         structured_results = unique_structured_results
+                                         final_search_results = structured_results
+                                         print(f"DEBUG: Deduplication complete. Kept {sum(len(d) for d in structured_results.values())} unique documents.")
+                                     except Exception as e:
+                                         print(f"Error during deduplication: {e}")
+
+                                     # === ЛОГИРОВАНИЕ ПОСЛЕ ДЕДУБЛИКАЦИИ ===
+                                     try:
+                                         deduplicated_list = []
+                                         for query, docs in structured_results.items():
+                                             for doc in docs:
+                                                 deduplicated_list.append({
+                                                     "query": query,
+                                                     "title": doc.get("title", ""),
+                                                     "url": doc.get("url", ""),
+                                                     "content": doc.get("content", "")
+                                                 })
+                                         
+                                         # Логирование в консоль
+                                         print(f"\nDEBUG: Deduplicated Results ({len(deduplicated_list)} docs):")
+                                         for item in deduplicated_list:
+                                             preview = item["content"][:300].replace('\n', ' ') + "..." if len(item["content"]) > 300 else item["content"]
+                                             print(f" - Query: {item['query']}")
+                                             print(f"   Title: {item['title']}")
+                                             print(f"   URL: {item['url']}")
+                                             print(f"   Content: {preview}\n")
+
+                                         # Логирование в Langfuse
+                                         if langfuse_manager.client:
+                                             try:
+                                                 event_params = {
+                                                     "name": "search_results_deduplicated",
+                                                     "metadata": {"deduplicated_results": deduplicated_list}
+                                                 }
+                                                 if trace_id:
+                                                     event_params["trace_id"] = trace_id
+                                                 
+                                                 langfuse_manager.client.event(**event_params)
+                                             except Exception as e:
+                                                 print(f"Warning: Could not log deduplicated results to Langfuse: {e}")
+                                     except Exception as e:
+                                         print(f"Error logging deduplicated results: {e}")
+
                                      # === ЛОГИКА ФИЛЬТРАЦИИ ===
                                      try:
                                          # Получаем промпт для фильтрации и конфигурацию
@@ -238,9 +300,10 @@ async def execute_expert_node(
             print(f"DEBUG Agent: Raw Tool Result Preview (first 200 chars): {str(tool_result)[:200]}...")
             
             # Получаем структурированные результаты поиска (из переменной или состояния) для включения в промпт
-            # Используем relevant_materials, если они есть, иначе search_results
+            # Используем СТРОГО ТОЛЬКО отфильтрованные материалы (relevant_materials)
+            # Если их нет (фильтрация ничего не вернула или произошла ошибка), считаем, что материалов нет.
             search_materials_text = ""
-            results_to_use = final_relevant_materials if final_relevant_materials else final_search_results
+            results_to_use = final_relevant_materials
             
             if results_to_use:
                 # Формируем текстовое представление материалов для промпта
@@ -256,25 +319,33 @@ async def execute_expert_node(
                         )
                 search_materials_text = "\n".join(materials_list)
             
-            # Формируем обновленный системный промпт с материалами
+            # Формируем обновленный системный промпт
+            # Мы НЕ добавляем материалы сюда, чтобы избежать дублирования, 
+            # так как они будут переданы в сообщении результата инструмента (tool_result_message).
             updated_system_prompt = system_prompt
-            if search_materials_text:
-                updated_system_prompt = f"""{system_prompt}
-
-НАЙДЕННЫЕ МАТЕРИАЛЫ ИЗ ВНУТРЕННЕЙ БАЗЫ ЗНАНИЙ:
-{search_materials_text}
-
-КРИТИЧЕСКИ ВАЖНО: Твой ответ должен строиться СТРОГО на основе этих найденных материалов. 
-Используй ТОЛЬКО информацию из материалов выше. Запрещено добавлять информацию, которой нет в найденных материалах.
-В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (укажи наименования и URL в скобках из раздела "Наименование" и "URL" выше).
-"""
             
+            # Формируем сообщение о результатах инструмента
+            # Если материалы найдены, выводим их фрагменты. Если нет - сообщаем об этом.
+            if search_materials_text:
+                tool_msg_content = f"Результат выполнения инструмента {tool_name}:\n{search_materials_text}"
+            else:
+                tool_msg_content = f"Результат выполнения инструмента {tool_name}:\nПодходящих материалов не найдено (ни один документ не прошел фильтрацию по релевантности)."
+
             tool_result_message = HumanMessage(
-                content=f"Результат выполнения инструмента {tool_name}:\n{str(tool_result)}\n\nКРИТИЧЕСКИ ВАЖНО: Теперь дай финальный ответ, используя СТРОГО ТОЛЬКО информацию из результатов поиска выше. Запрещено добавлять информацию, которой нет в найденных материалах. В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (наименование + URL)."
+                content=f"{tool_msg_content}\n\nКРИТИЧЕСКИ ВАЖНО: Теперь дай финальный ответ, используя СТРОГО ТОЛЬКО информацию из результатов поиска выше. Запрещено добавлять информацию, которой нет в найденных материалах. В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (наименование + URL)."
             )
             
             # Обновляем системный промпт в сообщениях
             updated_messages = [HumanMessage(content=updated_system_prompt)] + messages + [tool_result_message]
+            
+            # Логируем полный промпт (по запросу пользователя)
+            print(f"\n{'='*20} FULL PROMPT TO MODEL {'='*20}")
+            for msg in updated_messages:
+                role = msg.type if hasattr(msg, 'type') else msg.__class__.__name__
+                content = msg.content
+                print(f"--- Role: {role} ---\n{content}\n")
+            print(f"{'='*60}\n")
+            
             final_response = await llm.ainvoke(updated_messages, config=config)
             
             if final_response.content:
