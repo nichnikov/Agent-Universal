@@ -11,9 +11,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from ..state import AgentState
 from ..utils import get_prompt_data, create_structured_llm, create_llm, LangfuseManager
-from ..logging_utils import parse_and_log_search_results
-
-
 class ToolArgs(BaseModel):
     queries: Optional[List[str]] = None
     limit: Optional[int] = None
@@ -46,7 +43,7 @@ async def execute_expert_node(
                 break
         
         prompt_context = {"last_user_message": last_user_message} if last_user_message else {}
-        prompt_data = get_prompt_data(prompt_name, force_fallback=True, **prompt_context)
+        prompt_data = get_prompt_data(prompt_name, force_fallback=False, **prompt_context)
         system_prompt = prompt_data["content"]
         model_config = prompt_data.get("config", {})
         
@@ -87,8 +84,6 @@ async def execute_expert_node(
                     # Логируем результаты поиска, если это search tool
                     # Можно определить по имени инструмента или по наличию результата
                     if "search" in tool_name:
-                         parse_and_log_search_results(tool_result)
-                         
                          # Логируем структурированные результаты в Langfuse
                          try:
                              if hasattr(tool, 'get_last_search_results'):
@@ -271,11 +266,11 @@ async def execute_expert_node(
 
 КРИТИЧЕСКИ ВАЖНО: Твой ответ должен строиться СТРОГО на основе этих найденных материалов. 
 Используй ТОЛЬКО информацию из материалов выше. Запрещено добавлять информацию, которой нет в найденных материалах.
-В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (укажи наименования из раздела "Наименование" выше).
+В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (укажи наименования и URL в скобках из раздела "Наименование" и "URL" выше).
 """
             
             tool_result_message = HumanMessage(
-                content=f"Результат выполнения инструмента {tool_name}:\n{str(tool_result)}\n\nКРИТИЧЕСКИ ВАЖНО: Теперь дай финальный ответ, используя СТРОГО ТОЛЬКО информацию из результатов поиска выше. Запрещено добавлять информацию, которой нет в найденных материалах. В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе."
+                content=f"Результат выполнения инструмента {tool_name}:\n{str(tool_result)}\n\nКРИТИЧЕСКИ ВАЖНО: Теперь дай финальный ответ, используя СТРОГО ТОЛЬКО информацию из результатов поиска выше. Запрещено добавлять информацию, которой нет в найденных материалах. В поле 'references' укажи ТОЛЬКО те материалы, которые реально использованы в ответе (наименование + URL)."
             )
             
             # Обновляем системный промпт в сообщениях

@@ -16,7 +16,10 @@ from .action_internal.xml_parser import XmlDocumentParser
 
 logger = logging.getLogger(__name__)
 
-
+DOC_URL_FORMAT_BY_SYSTEM = {
+    "bss": "https://1gl.ru/?#/document/{moduleId}/{id}",
+    "uss": "https://1jur.ru/?#/document/{moduleId}/{id}",
+}
 
 class KnowledgeSearchInput(BaseModel):
     """Input schema for the Knowledge Search Tool."""
@@ -57,21 +60,23 @@ class KnowledgeSearchTool(BaseTool):
     _json_parser: JsonDocumentParser = PrivateAttr()
     _xml_parser: XmlDocumentParser = PrivateAttr()
     _default_pubdivid: int = PrivateAttr()
+    _system_alias: str = PrivateAttr()
     _last_search_results: Optional[Dict[str, Any]] = PrivateAttr(default=None)
 
-    def __init__(self, client: Optional[SearchClient] = None, default_pubdivid: int = 13):
+    def __init__(self, client: Optional[SearchClient] = None, default_pubdivid: int = 13, system_alias: str = "bss"):
         super().__init__()
         self._client = client or SearchClient()
         self._json_parser = JsonDocumentParser()
         self._xml_parser = XmlDocumentParser()
         self._default_pubdivid = default_pubdivid
+        self._system_alias = system_alias
         self._last_search_results = None
 
     async def _execute_single_search(self, query: str, limit: int, pub_alias: Optional[str]) -> Dict[str, Any]:
         """
         Executes a single search query and returns structured results.
         """
-        logger.info(f"Executing search query: '{query}' with pubdivid={self._default_pubdivid}")
+        logger.info(f"Executing search query: '{query}' with pubdivid={self._default_pubdivid}, system={self._system_alias}")
         
         # Подготовка параметров поиска
         params = SearchParams(
@@ -121,6 +126,13 @@ class KnowledgeSearchTool(BaseTool):
                     logger.error(f"Error parsing document {res.item.id}: {e}")
                     continue
 
+                # Формирование публичного URL
+                url_format = DOC_URL_FORMAT_BY_SYSTEM.get(self._system_alias, DOC_URL_FORMAT_BY_SYSTEM["bss"])
+                # Безопасно формируем URL, так как moduleId может быть None в некоторых случаях (хотя модель SearchItem требует str/int)
+                module_id = res.item.moduleId if res.item.moduleId is not None else 0
+                doc_id = res.item.id if res.item.id is not None else 0
+                public_url = url_format.format(moduleId=module_id, id=doc_id)
+
                 # Очистка и форматирование для LLM
                 MAX_CHARS = 4000
                 if len(parsed_text) > MAX_CHARS:
@@ -128,7 +140,7 @@ class KnowledgeSearchTool(BaseTool):
 
                 structured_docs.append({
                     "title": title,
-                    "url": res.item.url,
+                    "url": public_url, # Используем публичный URL вместо внутреннего
                     "content": parsed_text,
                     "source_id": res.item.id,
                     "module_id": res.item.moduleId
@@ -158,7 +170,6 @@ class KnowledgeSearchTool(BaseTool):
                 return "Error: No search queries provided. Please provide 'query' or 'queries'."
 
             # Используем значение limit из промпта, если оно не указано - используем значение по умолчанию
-            # Значение по умолчанию должно быть указано в промпте, но на случай если не передано - используем 5
             effective_limit = limit if limit is not None else 5
             
             # Запускаем поиск параллельно
@@ -169,7 +180,7 @@ class KnowledgeSearchTool(BaseTool):
             all_formatted_outputs = []
             
             # Добавляем метаданные поиска
-            metadata_header = f"SEARCH METADATA:\nQueries: {search_queries}\nLimit per query: {effective_limit}\nPubDivID: {self._default_pubdivid}\n---\n"
+            metadata_header = f"SEARCH METADATA:\nQueries: {search_queries}\nLimit per query: {effective_limit}\nPubDivID: {self._default_pubdivid}\nSystem: {self._system_alias}\n---\n"
             all_formatted_outputs.append(metadata_header)
 
             for res in results_list:
@@ -230,10 +241,10 @@ class KnowledgeSearchTool(BaseTool):
         return self._last_search_results
 
 
-def create_search_tool(default_pubdivid: int = 13) -> KnowledgeSearchTool:
+def create_search_tool(default_pubdivid: int = 13, system_alias: str = "bss") -> KnowledgeSearchTool:
     """Factory function to create the search tool."""
     client = SearchClient()
-    return KnowledgeSearchTool(client=client, default_pubdivid=default_pubdivid)
+    return KnowledgeSearchTool(client=client, default_pubdivid=default_pubdivid, system_alias=system_alias)
 
 
 if __name__ == "__main__":
@@ -250,8 +261,8 @@ if __name__ == "__main__":
         print("🔍 Запуск теста KnowledgeSearchTool...")
         
         try:
-            # Создаем инструмент
-            tool = create_search_tool(1)
+            # Создаем инструмент (тестируем uss для юриста)
+            tool = create_search_tool(default_pubdivid=13, system_alias="uss")
             
             # Тестовый запрос (несколько запросов)
             queries = ["когда упрощенец платит НДС", "НДС сроки уплаты"]

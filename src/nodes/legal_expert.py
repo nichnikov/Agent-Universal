@@ -27,7 +27,8 @@ async def legal_expert_node(state: AgentState, config: RunnableConfig) -> Dict[s
     Legal Expert узел - обрабатывает юридические запросы с использованием structured output.
     """
     # Инициализируем инструменты
-    action_search = create_search_tool()
+    # Для юридического эксперта используем USS (1jur.ru)
+    action_search = create_search_tool(default_pubdivid=13, system_alias="uss")
     
     tools_map = {
         "search_legal_code": action_search, # Мапим старое название на новый инструмент
